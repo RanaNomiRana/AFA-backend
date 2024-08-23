@@ -1,0 +1,25 @@
+{
+  "name": "live-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "nodemon node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bad-words": "^3.0.4",
+    "compromise": "^14.14.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "moment": "^2.30.1",
+    "mongodb": "^6.8.0",
+    "mongoose": "^8.5.1",
+    "natural": "^8.0.1",
+    "profanity-filter": "^0.2.1",
+    "sentiment": "^5.0.2",
+    "socket.io": "^4.7.5"
+  }
+}
