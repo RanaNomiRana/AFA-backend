@@ -107,6 +107,46 @@ const connectionDetailSchema = new mongoose.Schema({
     timestamps: true, // Adds createdAt and updatedAt fields
 });
 
+
+
+const timelineAnalysisSchema = new mongoose.Schema({
+    date: { type: String, required: true }, // Format: YYYY-MM-DD
+    totalMessages: { type: Number, default: 0 },
+    suspiciousMessages: { type: Number, default: 0 },
+    totalCalls: { type: Number, default: 0 },
+    incomingCalls: { type: Number, default: 0 },
+    outgoingCalls: { type: Number, default: 0 },
+    missedCalls: { type: Number, default: 0 },
+}, { timestamps: true });
+
+
+
+const spamURLAnalysisSchema = new mongoose.Schema({
+    sender: { type: String, required: true },
+    date: { type: Date, required: true },
+    body: { type: String, required: true }
+}, { timestamps: true });
+
+
+  
+  // Define the DataCorrelation schema
+  const dataCorrelationSchema = new mongoose.Schema({
+    number: { type: String, required: true },
+    smsCount: { type: Number, required: true },
+    callLogs: [callLogSchema] // Array of CallLog sub-documents
+  }, { timestamps: true }); // Optional: add timestamps for createdAt and updatedAt
+  
+  // Create and export the DataCorrelation model
+  const DataCorrelation = mongoose.model('DataCorrelation', dataCorrelationSchema);
+  
+const SpamURLAnalysis = mongoose.model('SpamURLAnalysis', spamURLAnalysisSchema);
+
+
+const TimelineAnalysis = mongoose.model('TimelineAnalysis', timelineAnalysisSchema);
+
+
+
+
 // Create the model from the schema
 const ConnectionDetail = mongoose.model('ConnectionDetail', connectionDetailSchema);
 
@@ -499,7 +539,7 @@ app.get('/comprehensive-report', async (req, res) => {
         // Step 7: Aggregate call statistics
         const callStats = await CallLog.aggregate([
             {
-                $group: {
+                $group: {  
                     _id: null,
                     totalCalls: { $sum: 1 },
                     incomingCalls: { $sum: { $cond: [{ $eq: ['$type', 'incoming'] }, 1, 0] } },
@@ -688,7 +728,7 @@ app.get('/comprehensive-report', async (req, res) => {
 
 
 
-
+ 
 
 
 app.get('/search', async (req, res) => {
@@ -872,6 +912,11 @@ app.get('/timeline-analysis', async (req, res) => {
 
         combinedTimeline.sort((a, b) => new Date(a.date) - new Date(b.date));
 
+        // Save the combined timeline data into the database
+        await TimelineAnalysis.deleteMany({}); // Optionally clear previous data
+        await TimelineAnalysis.insertMany(combinedTimeline);
+
+        // Send the results in the response
         res.json(combinedTimeline);
     } catch (err) {
         console.error('Error performing timeline analysis:', err);
@@ -879,35 +924,80 @@ app.get('/timeline-analysis', async (req, res) => {
     }
 });
 
-
 app.get('/url-analysis', async (req, res) => {
     try {
         const deviceName = await getDeviceName();
         await connectToDB(deviceName);
 
+        const spamPatterns = [/example-spam-domain\.com/, /another-spam-site\.net/];
+
         const smsWithUrls = await SMS.find({ body: /http:\/\/|https:\/\/|www\./i });
 
-        res.json(smsWithUrls);
+        const spamUrlData = [];
+        const nonSpamUrlData = [];
+
+        smsWithUrls.forEach(sms => {
+            const urls = extractUrls(sms.body);
+            console.log('Extracted URLs:', urls); // Log extracted URLs
+            const containsSpam = urls.some(url => spamPatterns.some(pattern => pattern.test(url)));
+
+            const smsData = {
+                sender: sms.address,
+                date: sms.date,
+                body: sms.body,
+                urls: urls
+            };
+
+            if (containsSpam) {
+                spamUrlData.push(smsData);
+            } else {
+                nonSpamUrlData.push(smsData);
+            }
+        });
+
+        console.log('Spam URL Data:', spamUrlData); // Log spam URL data
+
+        await SpamURLAnalysis.deleteMany({});
+        await SpamURLAnalysis.insertMany(spamUrlData);
+
+        res.json({
+            spamUrls: spamUrlData,
+            nonSpamUrls: nonSpamUrlData,
+        });
     } catch (err) {
         console.error('Error performing URL analysis:', err);
         res.status(500).send('Error performing URL analysis');
     }
 });
 
+// Function to extract URLs from text
+const extractUrls = (text) => {
+    const urlPattern = /((http|https):\/\/[^\s]+)/g;
+    return text.match(urlPattern) || [];
+};
+
+
+
+
 app.get('/data-correlation', async (req, res) => {
     try {
+        const deviceName = await getDeviceName();
+        await connectToDB(deviceName);
+
+        // Fetch SMS data
         const smsData = await SMS.aggregate([
-            { $group: { _id: "$address", smsCount: { $sum: 1 } } },
+            { $group: { _id: "$address", smsCount: { $sum: 1 }, messages: { $push: "$$ROOT" } } }, // Collect SMS details
             { $sort: { smsCount: -1 } },
-            { $limit: 10 }
         ]);
 
+        // Fetch correlated call logs for each SMS data entry
         const correlatedNumbersPromises = smsData.map(async (sms) => {
             try {
                 const callLogs = await CallLog.find({ number: sms._id });
                 return {
                     number: sms._id,
                     smsCount: sms.smsCount,
+                    messages: sms.messages, // Include SMS details
                     callLogs
                 };
             } catch (error) {
@@ -915,20 +1005,35 @@ app.get('/data-correlation', async (req, res) => {
                 return {
                     number: sms._id,
                     smsCount: sms.smsCount,
+                    messages: sms.messages,
                     callLogs: []
                 };
             }
         });
 
+        // Wait for all correlated numbers to be processed
         const results = await Promise.all(correlatedNumbersPromises);
 
-        res.json(results);
+        // Log the results to verify the data
+        console.log('Results to be inserted:', results);
+
+        // Validate results before saving
+        const validResults = results.filter(result => result.number); // Filter out invalid entries
+
+        // Save the results into the database
+        await DataCorrelation.deleteMany({}); // Optionally clear previous data
+        await DataCorrelation.insertMany(validResults);
+
+        // Prepare response
+        res.json( validResults );
     } catch (err) {
         console.error('Error performing data correlation:', err);
         res.status(500).send('Error performing data correlation');
     }
 });
 
+
 app.listen(port, async () => {
     console.log(`Server running on http://localhost:${port}`);
 });
+  
